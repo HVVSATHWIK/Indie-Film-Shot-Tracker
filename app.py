@@ -103,6 +103,9 @@ def login():
             session["role"] = user["role"]
             return redirect(url_for("index"))
 
+        # Debug: print why login failed
+        import logging
+        logging.warning(f"Login failed for user '{username}'. User exists: {bool(user)}")
         return render_template("login.html", error="Invalid credentials. Try again.")
 
     return render_template("login.html")

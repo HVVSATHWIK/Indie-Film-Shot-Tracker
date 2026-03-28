@@ -912,6 +912,7 @@ function buildShotCard(shot) {
               `<option value="${s}" ${s === shot.status ? "selected" : ""}>${s}</option>`
             ).join("")}
           </select>
+          <!-- Only one badge for the current status -->
           <span class="shot-badge ${statusBadgeClass(shot.status)}" id="badge-${shot.id}">
             ${escHtml(shot.status)}
           </span>
