@@ -145,7 +145,7 @@ const ROLE_CLASSES = {
   camera: "role-camera",
 };
 
-const STATUS_OPTIONS = ["Pending", "Rolling", "Printed", "No Good"];
+const STATUS_OPTIONS = ["Pending", "Rolling", "Printed", "Completed", "No Good"];
 const PRIORITY_OPTIONS = ["Low", "Medium", "High", "Critical"];
 const ASSIGNMENT_TARGETS = {
   all: "All Crew",
@@ -306,9 +306,13 @@ function renderNotifications() {
 }
 
 function statusBadgeClass(status) {
-  return { Pending: "badge-pending", Rolling: "badge-rolling",
-           Printed: "badge-printed", "No Good": "badge-nogood" }[status]
-    ?? "badge-pending";
+  return {
+    Pending: "badge-pending",
+    Rolling: "badge-rolling",
+    Printed: "badge-printed",
+    Completed: "badge-completed",
+    "No Good": "badge-nogood"
+  }[status] ?? "badge-pending";
 }
 
 function formatTime(ts) {

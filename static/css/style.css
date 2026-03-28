@@ -685,6 +685,7 @@ body::before {
 .shot-card[data-status="Rolling"]  { border-left-color: var(--blue-roll); }
 .shot-card[data-status="No Good"]  { border-left-color: var(--red-hot); }
 .shot-card[data-status="Pending"]  { border-left-color: var(--amber-dim); }
+.shot-card[data-status="Completed"] { border-left-color: var(--green-ok); opacity: 0.85; filter: grayscale(0.2); }
 
 .shot-card.drag-over {
   border-color: var(--amber);
@@ -753,6 +754,11 @@ body::before {
 .badge-rolling { background: rgba(64,150,232,.15); color: var(--blue-roll);border: 1px solid #3070b8; }
 .badge-printed { background: rgba(64,200,108,.15); color: var(--green-ok); border: 1px solid #30985a; }
 .badge-nogood  { background: rgba(232,64,64,.15);  color: var(--red-hot);  border: 1px solid #b83030; }
+.badge-completed {
+  background: rgba(64,200,108,.18);
+  color: var(--green-ok);
+  border: 1px solid #30985a;
+}
 
 /* Shot meta chips */
 .shot-meta {
