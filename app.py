@@ -18,12 +18,25 @@ USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
 def load_users():
     if not os.path.exists(USERS_FILE):
         return []
-    with open(USERS_FILE, "r") as f:
-        return json.load(f).get("users", [])
+    try:
+        with open(USERS_FILE, "r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    users = data.get("users", [])
+    return users if isinstance(users, list) else []
 
 def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump({"users": users}, f, indent=2)
+    try:
+        with open(USERS_FILE, "w") as f:
+            json.dump({"users": users}, f, indent=2)
+        return True
+    except OSError:
+        return False
 
 # Load the ML model once at startup (returns None gracefully if pkl missing)
 model = load_model()
@@ -69,7 +82,14 @@ def signup():
             return render_template("signup.html", error="Username already exists!")
             
         users.append({"username": username, "password": password, "role": role})
-        save_users(users)
+        if not save_users(users):
+            return render_template(
+                "signup.html",
+                error=(
+                    "Signup is temporarily unavailable on this deployment "
+                    "because the server cannot save user data."
+                ),
+            )
         
         session["user_id"] = username
         session["username"] = username
