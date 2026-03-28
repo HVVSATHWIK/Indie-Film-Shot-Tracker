@@ -950,6 +950,15 @@ function renderDashboard() {
   const dashboard = document.getElementById("shotDashboard");
   const empty     = document.getElementById("emptyState");
 
+  if (!dashboard) {
+    console.error("renderDashboard error: #shotDashboard element not found");
+    return;
+  }
+  if (!empty) {
+    console.error("renderDashboard error: #emptyState element not found");
+    return;
+  }
+
   if (list.length === 0) {
     dashboard.innerHTML = "";
     dashboard.appendChild(empty);
