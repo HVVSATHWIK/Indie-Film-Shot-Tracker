@@ -129,8 +129,11 @@ let   currentProjectId = "";
 let   projects = [];
 let   currentRole = "director";
 let   currentReferenceImage = "";
+let   currentLocation = { name: "", lat: null, lng: null };
 let   draggedShotId = null;
 let   notifications = [];
+let   shotMap = null;
+let   shotMarker = null;
 
 const PROJECTS_KEY = "shotTracker.projects.v1";
 const CURRENT_PROJECT_KEY = "shotTracker.currentProject.v1";
@@ -143,6 +146,7 @@ const ROLE_CLASSES = {
 };
 
 const STATUS_OPTIONS = ["Pending", "Rolling", "Printed", "No Good"];
+const PRIORITY_OPTIONS = ["Low", "Medium", "High", "Critical"];
 const ASSIGNMENT_TARGETS = {
   all: "All Crew",
   director: "Director",
@@ -151,6 +155,8 @@ const ASSIGNMENT_TARGETS = {
 };
 
 const NOTIFICATIONS_KEY = "shotTracker.notifications.v1";
+const LOCATION_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
+const LOCATION_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse";
 
 const MOVEMENT_TIME = {
   Static: { setup: 8, shoot: 6 },
@@ -398,6 +404,38 @@ function getSceneShots(scene) {
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
+function getShotByCode(shotCode) {
+  const code = String(shotCode || "").trim().toUpperCase();
+  if (!code) return null;
+  return allShots.find((s) => String(s.shotCode || "").trim().toUpperCase() === code) ?? null;
+}
+
+function getDependencyState(shot) {
+  const dependencyCode = String(shot.dependsOnCode || "").trim().toUpperCase();
+  if (!dependencyCode) {
+    return { state: "none", label: "No blocker" };
+  }
+
+  const blocker = getShotByCode(dependencyCode);
+  if (!blocker) {
+    return { state: "missing", label: `Missing ${dependencyCode}` };
+  }
+
+  if (blocker.status !== "Printed") {
+    return { state: "blocked", label: `Blocked by ${dependencyCode}` };
+  }
+
+  return { state: "ready", label: `Ready after ${dependencyCode}` };
+}
+
+function isOverdue(shot) {
+  if (!shot.targetDate || shot.status === "Printed") return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(`${shot.targetDate}T00:00:00`);
+  return Number.isFinite(target.getTime()) && target.getTime() < today.getTime();
+}
+
 function generateShotCode(scene) {
   const normalized = normalizeScene(scene);
   if (!normalized) return "";
@@ -430,6 +468,161 @@ function renderImagePreview(dataUrl) {
   }
   img.src = dataUrl;
   wrap.style.display = "block";
+}
+
+function formatCoord(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "";
+  return value.toFixed(5);
+}
+
+function updateLocationInputs() {
+  document.getElementById("locationName").value = currentLocation.name || "";
+  document.getElementById("locationLat").value =
+    typeof currentLocation.lat === "number" ? String(currentLocation.lat) : "";
+  document.getElementById("locationLng").value =
+    typeof currentLocation.lng === "number" ? String(currentLocation.lng) : "";
+}
+
+function renderLocationReadout() {
+  const readout = document.getElementById("locationReadout");
+  if (!readout) return;
+
+  if (typeof currentLocation.lat !== "number" || typeof currentLocation.lng !== "number") {
+    readout.textContent = "No location selected yet. Click the map or search above.";
+    return;
+  }
+
+  const label = currentLocation.name || "Pinned location";
+  readout.textContent = `${label} (${formatCoord(currentLocation.lat)}, ${formatCoord(currentLocation.lng)})`;
+}
+
+function setShotLocation(location, shouldCenter = true) {
+  currentLocation = {
+    name: String(location.name || "").trim(),
+    lat: typeof location.lat === "number" ? location.lat : null,
+    lng: typeof location.lng === "number" ? location.lng : null,
+  };
+
+  updateLocationInputs();
+  renderLocationReadout();
+
+  if (!shotMap || typeof currentLocation.lat !== "number" || typeof currentLocation.lng !== "number") {
+    return;
+  }
+
+  const latLng = [currentLocation.lat, currentLocation.lng];
+  if (!shotMarker) {
+    shotMarker = L.marker(latLng).addTo(shotMap);
+  } else {
+    shotMarker.setLatLng(latLng);
+  }
+
+  if (currentLocation.name) {
+    shotMarker.bindPopup(escHtml(currentLocation.name));
+  }
+
+  if (shouldCenter) {
+    shotMap.setView(latLng, Math.max(shotMap.getZoom(), 14));
+  }
+}
+
+function clearShotLocation(resetMapView = false) {
+  currentLocation = { name: "", lat: null, lng: null };
+  updateLocationInputs();
+  renderLocationReadout();
+
+  if (shotMarker) {
+    shotMap.removeLayer(shotMarker);
+    shotMarker = null;
+  }
+
+  if (resetMapView && shotMap) {
+    shotMap.setView([20, 0], 2);
+  }
+}
+
+async function reverseGeocode(lat, lng) {
+  const url = `${LOCATION_REVERSE_URL}?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18`;
+  const resp = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!resp.ok) {
+    throw new Error(`Reverse geocode failed: ${resp.status}`);
+  }
+  const row = await resp.json();
+  return String(row.display_name || "").trim();
+}
+
+async function handleSearchLocation() {
+  const input = document.getElementById("locationSearch");
+  const query = String(input.value || "").trim();
+  if (!query) {
+    showToast("Type a location to search.", "warning");
+    return;
+  }
+
+  const url = `${LOCATION_SEARCH_URL}?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
+
+    const rows = await resp.json();
+    if (!Array.isArray(rows) || rows.length === 0) {
+      showToast("No map result found. Try a broader place name.", "warning");
+      return;
+    }
+
+    const best = rows[0];
+    const lat = Number(best.lat);
+    const lng = Number(best.lon);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      showToast("Location result missing coordinates.", "danger");
+      return;
+    }
+
+    setShotLocation({
+      name: String(best.display_name || query),
+      lat,
+      lng,
+    });
+    showToast("Location pinned from search.");
+  } catch (err) {
+    console.error(err);
+    showToast("Location search unavailable right now.", "danger");
+  }
+}
+
+function initShotMap() {
+  const mapEl = document.getElementById("shotMap");
+  if (!mapEl || typeof L === "undefined") return;
+
+  shotMap = L.map("shotMap").setView([20, 0], 2);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(shotMap);
+
+  shotMap.on("click", async (e) => {
+    setShotLocation({ lat: e.latlng.lat, lng: e.latlng.lng, name: "" });
+    try {
+      const name = await reverseGeocode(e.latlng.lat, e.latlng.lng);
+      if (name) {
+        setShotLocation({ lat: e.latlng.lat, lng: e.latlng.lng, name }, false);
+      }
+      showToast("Location pinned from map.");
+    } catch (err) {
+      console.error(err);
+      showToast("Pinned coordinates, but address lookup failed.", "warning");
+    }
+  });
+
+  renderLocationReadout();
 }
 
 function readImageAsDataUrl(file) {
@@ -563,9 +756,15 @@ document.getElementById("shotForm").addEventListener("submit", async (e) => {
   const sceneNumber = normalizeScene(document.getElementById("sceneNumber").value);
   const shotName    = document.getElementById("shotName").value.trim();
   const shotCode    = document.getElementById("shotCode").value.trim();
+  const dependsOnCode = document.getElementById("dependsOnCode").value.trim().toUpperCase();
 
   if (!sceneNumber || !shotName || !shotCode) {
     showToast("Scene # and Shot Name are required.", "danger");
+    return;
+  }
+
+  if (dependsOnCode && dependsOnCode === shotCode.toUpperCase()) {
+    showToast("A shot cannot depend on itself.", "warning");
     return;
   }
 
@@ -593,8 +792,14 @@ document.getElementById("shotForm").addEventListener("submit", async (e) => {
     cameraAngle   : document.getElementById("cameraAngle").value,
     movement      : document.getElementById("movement").value,
     status        : document.getElementById("shotStatus").value,
+    priority      : document.getElementById("priority").value,
+    targetDate    : document.getElementById("targetDate").value,
+    dependsOnCode,
     assignedTo    : document.getElementById("assignedTo").value,
     directorNotes : document.getElementById("directorNotes").value.trim(),
+    locationName  : currentLocation.name || "",
+    locationLat   : typeof currentLocation.lat === "number" ? currentLocation.lat : null,
+    locationLng   : typeof currentLocation.lng === "number" ? currentLocation.lng : null,
     takes         : [...takesInForm.filter(t => t.trim())],
     referenceImage: currentReferenceImage,
     ...timeEstimate,
@@ -628,6 +833,7 @@ document.getElementById("shotForm").addEventListener("submit", async (e) => {
     document.getElementById("shotForm").reset();
     takesInForm = [];
     currentReferenceImage = "";
+    clearShotLocation();
     renderTakesInForm();
     renderImagePreview("");
     document.getElementById("mlSuggestion").style.display = "none";
@@ -642,6 +848,30 @@ document.getElementById("shotForm").addEventListener("submit", async (e) => {
 
 function buildShotCard(shot) {
   const assignedToLabel = shot.assignedTo ? (ASSIGNMENT_TARGETS[shot.assignedTo] ?? shot.assignedTo) : "Unassigned";
+  const dependency = getDependencyState(shot);
+  const priority = PRIORITY_OPTIONS.includes(shot.priority) ? shot.priority : "Medium";
+  const priorityClass = `meta-chip-priority-${priority.toLowerCase()}`;
+  const dependencyClass = {
+    none: "meta-chip-dep-none",
+    ready: "meta-chip-dep-ready",
+    blocked: "meta-chip-dep-blocked",
+    missing: "meta-chip-dep-missing",
+  }[dependency.state] ?? "meta-chip-dep-none";
+
+  const dueText = shot.targetDate
+    ? (isOverdue(shot) ? `Overdue: ${shot.targetDate}` : `Due: ${shot.targetDate}`)
+    : "No due date";
+  const dueClass = isOverdue(shot) ? "meta-chip-overdue" : "";
+
+  const parsedLat = Number(shot.locationLat);
+  const parsedLng = Number(shot.locationLng);
+  const hasMapPoint = Number.isFinite(parsedLat) && Number.isFinite(parsedLng);
+  const locationName = String(shot.locationName || "").trim();
+  const locationLabel = locationName || (hasMapPoint ? `Lat ${formatCoord(parsedLat)}, Lng ${formatCoord(parsedLng)}` : "No location");
+  const mapUrl = hasMapPoint
+    ? `https://www.openstreetmap.org/?mlat=${encodeURIComponent(parsedLat)}&mlon=${encodeURIComponent(parsedLng)}#map=16/${encodeURIComponent(parsedLat)}/${encodeURIComponent(parsedLng)}`
+    : "";
+
   const imgHtml = shot.referenceImage
     ? `<a href="${escHtml(shot.referenceImage)}" target="_blank" rel="noopener" class="ref-image-link director-camera-only" title="Open reference image">
          <img class="ref-image-thumb" src="${escHtml(shot.referenceImage)}" alt="Reference" />
@@ -673,7 +903,7 @@ function buildShotCard(shot) {
         <div class="d-flex align-items-center gap-2">
           <span class="drag-handle ad-only" title="Drag to reorder in scene"><i class="bi bi-grip-vertical"></i></span>
           <select class="form-select fc-custom status-inline"
-                  onchange="handleStatusChange(${shot.id}, this.value)">
+                  onchange="handleStatusChange(${shot.id}, this.value, this)">
             ${STATUS_OPTIONS.map(s =>
               `<option value="${s}" ${s === shot.status ? "selected" : ""}>${s}</option>`
             ).join("")}
@@ -692,10 +922,16 @@ function buildShotCard(shot) {
         <span class="meta-chip camera-only"><i class="bi bi-aspect-ratio me-1"></i>${escHtml(shot.shotSize)}</span>
         <span class="meta-chip camera-only"><i class="bi bi-camera2 me-1"></i>${escHtml(shot.cameraAngle)}</span>
         <span class="meta-chip camera-only"><i class="bi bi-arrows-move me-1"></i>${escHtml(shot.movement)}</span>
+        <span class="meta-chip ${priorityClass}"><i class="bi bi-flag-fill me-1"></i>${escHtml(priority)}</span>
+        <span class="meta-chip ${dueClass}"><i class="bi bi-calendar-event me-1"></i>${escHtml(dueText)}</span>
+        <span class="meta-chip ${dependencyClass}"><i class="bi bi-diagram-2-fill me-1"></i>${escHtml(dependency.label)}</span>
+        <span class="meta-chip"><i class="bi bi-geo-alt-fill me-1"></i>${escHtml(locationLabel)}</span>
         <span class="meta-chip director-only"><i class="bi bi-bullseye me-1"></i>${escHtml(assignedToLabel)}</span>
         <span class="meta-chip ad-only"><i class="bi bi-hourglass-split me-1"></i>${formatMinutes(shot.estimatedTotalMin || 0)}</span>
         <span class="meta-time ms-auto">${formatTime(shot.createdAt)}</span>
       </div>
+
+      ${mapUrl ? `<div class="mb-2"><a href="${escHtml(mapUrl)}" target="_blank" rel="noopener" class="map-open-link"><i class="bi bi-map me-1"></i>Open pinned location</a></div>` : ""}
 
       ${imgHtml}
 
@@ -754,26 +990,34 @@ function getFilteredShots() {
   const q  = document.getElementById("searchInput").value.toLowerCase();
   const sf = document.getElementById("filterStatus").value;
   return allShots.filter(s =>
-    (!q  || s.scene.toLowerCase().includes(q) || s.shotName.toLowerCase().includes(q) || String(s.shotCode || "").toLowerCase().includes(q)) &&
+    (!q  || s.scene.toLowerCase().includes(q) || s.shotName.toLowerCase().includes(q) || String(s.shotCode || "").toLowerCase().includes(q) || String(s.priority || "").toLowerCase().includes(q) || String(s.dependsOnCode || "").toLowerCase().includes(q) || String(s.locationName || "").toLowerCase().includes(q)) &&
     (!sf || s.status === sf)
   );
 }
 
-async function handleStatusChange(id, newStatus) {
+async function handleStatusChange(id, newStatus, selectEl) {
   const shot = allShots.find(s => s.id === id);
   if (!shot) return;
+
+  const previousStatus = shot.status;
+  if (newStatus === "Rolling" || newStatus === "Printed") {
+    const dependency = getDependencyState(shot);
+    if (dependency.state === "blocked" || dependency.state === "missing") {
+      if (selectEl) selectEl.value = previousStatus;
+      showToast(`${dependency.label}. Resolve dependency first.`, "warning");
+      return;
+    }
+  }
+
   shot.status = newStatus;
   try {
     await db.updateShot(shot);
-    const badge = document.getElementById(`badge-${id}`);
-    if (badge) {
-      badge.textContent = newStatus;
-      badge.className   = `shot-badge ${statusBadgeClass(newStatus)}`;
-    }
-    const card = document.querySelector(`.shot-card[data-id="${id}"]`);
-    if (card) card.dataset.status = newStatus;
+    renderDashboard();
+    updateCounters();
   } catch (err) {
     console.error("updateShot error:", err);
+    shot.status = previousStatus;
+    if (selectEl) selectEl.value = previousStatus;
     showToast("Failed to update status.", "danger");
   }
 }
@@ -837,6 +1081,34 @@ function updateCounters() {
   document.getElementById("totalScenesCount").textContent =
     sceneCount;
   document.getElementById("remainingMinutesCount").textContent = formatMinutes(remainingMin);
+  renderOpsSummary();
+}
+
+function renderOpsSummary() {
+  const host = document.getElementById("opsSummary");
+  if (!host) return;
+
+  if (!allShots.length) {
+    host.innerHTML = `
+      <div class="ops-metric muted">No shots yet. Add your first shot to see production analytics.</div>
+    `;
+    return;
+  }
+
+  const printed = allShots.filter((s) => s.status === "Printed").length;
+  const completion = Math.round((printed / allShots.length) * 100);
+  const blocked = allShots.filter((s) => getDependencyState(s).state === "blocked").length;
+  const overdue = allShots.filter((s) => isOverdue(s)).length;
+  const highRisk = allShots.filter((s) => ["High", "Critical"].includes(s.priority || "Medium") && s.status !== "Printed").length;
+  const mapped = allShots.filter((s) => Number.isFinite(Number(s.locationLat)) && Number.isFinite(Number(s.locationLng))).length;
+
+  host.innerHTML = `
+    <div class="ops-metric"><span class="label">Completion</span><span class="value">${completion}%</span></div>
+    <div class="ops-metric ${blocked ? "warn" : "ok"}"><span class="label">Blocked</span><span class="value">${blocked}</span></div>
+    <div class="ops-metric ${overdue ? "danger" : "ok"}"><span class="label">Overdue</span><span class="value">${overdue}</span></div>
+    <div class="ops-metric ${mapped ? "ok" : "warn"}"><span class="label">Mapped</span><span class="value">${mapped}</span></div>
+    <div class="ops-metric ${highRisk ? "warn" : "ok"}"><span class="label">High Priority Open</span><span class="value">${highRisk}</span></div>
+  `;
 }
 
 document.getElementById("searchInput").addEventListener("input",  () => renderDashboard());
@@ -967,6 +1239,50 @@ async function hydrateLegacyRows() {
       row.assignedTo = "all";
       changed = true;
     }
+    if (!PRIORITY_OPTIONS.includes(row.priority)) {
+      row.priority = "Medium";
+      changed = true;
+    }
+    if (typeof row.targetDate !== "string") {
+      row.targetDate = "";
+      changed = true;
+    }
+    if (typeof row.locationName !== "string") {
+      row.locationName = "";
+      changed = true;
+    }
+    if (row.locationLat === undefined || row.locationLat === "") {
+      if (row.locationLat !== null) {
+        row.locationLat = null;
+        changed = true;
+      }
+    } else {
+      const lat = Number(row.locationLat);
+      const normalizedLat = Number.isFinite(lat) ? lat : null;
+      if (normalizedLat !== row.locationLat) {
+        row.locationLat = normalizedLat;
+        changed = true;
+      }
+    }
+    if (row.locationLng === undefined || row.locationLng === "") {
+      if (row.locationLng !== null) {
+        row.locationLng = null;
+        changed = true;
+      }
+    } else {
+      const lng = Number(row.locationLng);
+      const normalizedLng = Number.isFinite(lng) ? lng : null;
+      if (normalizedLng !== row.locationLng) {
+        row.locationLng = normalizedLng;
+        changed = true;
+      }
+    }
+    const rawDependency = typeof row.dependsOnCode === "string" ? row.dependsOnCode : "";
+    const normalizedDependency = rawDependency.trim().toUpperCase();
+    if (normalizedDependency !== rawDependency) {
+      row.dependsOnCode = normalizedDependency;
+      changed = true;
+    }
     if (changed) updates.push(db.updateShot(row));
   }
   await Promise.all(updates);
@@ -992,6 +1308,19 @@ async function init() {
 
   const savedRole = window.SESSION_ROLE || localStorage.getItem(ROLE_KEY) || "director";
   applyRole(savedRole);
+  initShotMap();
+
+  document.getElementById("searchLocationBtn").addEventListener("click", handleSearchLocation);
+  document.getElementById("clearLocationBtn").addEventListener("click", () => {
+    clearShotLocation(true);
+    document.getElementById("locationSearch").value = "";
+    showToast("Location cleared.", "warning");
+  });
+  document.getElementById("locationSearch").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    handleSearchLocation();
+  });
 
   document.getElementById("notificationBtn").addEventListener("click", () => {
     const panel = document.getElementById("notificationPanel");

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Login — Shot Tracker</title>
+  <title>Login - Shot Tracker</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -13,23 +13,17 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding-top: 40px;
-      padding-bottom: 40px;
+      min-height: 100vh;
+      padding: 40px 16px;
       background-color: var(--bg-base);
     }
-    .form-signin {
-      max-width: 400px;
+    .auth-card {
+      width: min(420px, 100%);
       padding: 2rem;
       background: var(--bg-panel);
       border: 1px solid var(--border-color);
       border-radius: 4px;
       box-shadow: 0 10px 30px rgba(0,0,0,.5);
-    }
-    .login-logo {
-      display: block;
-      margin: 0 auto 1.5rem;
-      height: 60px;
-      opacity: 0.9;
     }
     .error-msg {
       font-family: var(--font-mono);
@@ -45,8 +39,8 @@
 </head>
 <body>
 
-<main class="form-signin w-100 m-auto">
-  <form method="POST">
+<main class="auth-card">
+  <form method="POST" novalidate>
     <div class="text-center mb-4">
       <div class="rec-indicator d-inline-flex mb-3" style="opacity:1">
         <span class="rec-dot"></span>
@@ -64,15 +58,18 @@
       <label class="field-label">CREW ID / USERNAME</label>
       <input type="text" name="username" class="form-control fc-custom" placeholder="e.g. director_one" required autofocus />
     </div>
+
     <div class="mb-4">
       <label class="field-label">ACCESS KEY / PASSWORD</label>
-      <input type="password" name="password" class="form-control fc-custom" placeholder="••••••••" required />
+      <input type="password" name="password" class="form-control fc-custom" placeholder="Minimum 6 characters" required />
     </div>
 
     <button class="btn btn-log w-100 mb-3" type="submit">INITIALIZE SESSION</button>
-    
+
     <div class="text-center">
-        <a href="{{ url_for('signup') }}" class="app-subtitle" style="text-decoration: none; color: var(--text-mid); border-bottom: 1px dashed var(--text-dim);">REGISTER NEW CREW MEMBER</a>
+      <a href="{{ url_for('signup') }}" class="app-subtitle" style="text-decoration:none;color:var(--text-mid);border-bottom:1px dashed var(--text-dim);">
+        REGISTER NEW CREW MEMBER
+      </a>
     </div>
   </form>
 </main>
